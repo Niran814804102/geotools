@@ -621,8 +621,8 @@ public class ShpFiles {
      */
     public InputStream getInputStreamFromURL(URL url) {
         String path = url.getPath();
-        String[] split = path.split("/");
-        if (split.length < 6) {
+        String[] split = path.split("/", 7);
+        if (split.length < 7) {
             throw new RuntimeException(
                     String.format(
                             "Failed when construct s3Client by url %s", url.toExternalForm()));
