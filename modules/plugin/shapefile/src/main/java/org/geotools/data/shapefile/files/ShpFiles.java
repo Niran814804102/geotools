@@ -19,16 +19,16 @@ package org.geotools.data.shapefile.files;
 import static org.geotools.data.shapefile.files.ShpFileType.DBF;
 import static org.geotools.data.shapefile.files.ShpFileType.SHP;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.FilenameFilter;
-import java.io.FilterInputStream;
-import java.io.FilterOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.RandomAccessFile;
+import com.amazonaws.AmazonClientException;
+import com.amazonaws.ClientConfiguration;
+import com.amazonaws.auth.*;
+import com.amazonaws.retry.PredefinedRetryPolicies;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.GetObjectRequest;
+import com.amazonaws.services.s3.model.S3Object;
+import com.amazonaws.services.s3.model.S3ObjectInputStream;
+import java.io.*;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
@@ -38,16 +38,13 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileChannel.MapMode;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.apache.commons.lang3.StringUtils;
 import org.geotools.util.URLs;
 import org.geotools.util.logging.Logging;
 
@@ -118,7 +115,7 @@ public class ShpFiles {
     /**
      * Searches for all the files and adds then to the map of files.
      *
-     * @param file any one of the shapefile files
+     * @param url any one of the shapefile files
      */
     public ShpFiles(URL url) throws IllegalArgumentException {
         init(url);
@@ -300,7 +297,7 @@ public class ShpFiles {
      *
      * @see #getInputStream(ShpFileType, FileReader)
      * @see #getReadChannel(ShpFileType, FileReader)
-     * @see #getWriteChannel(ShpFileType, FileReader)
+     * @see #getWriteChannel(ShpFileType, FileWriter)
      * @param type the type of the file desired.
      * @param requestor the object that is requesting the File. The same object must release the
      *     lock and is also used for debugging.
@@ -320,7 +317,7 @@ public class ShpFiles {
      *
      * @see #getInputStream(ShpFileType, FileReader)
      * @see #getReadChannel(ShpFileType, FileReader)
-     * @see #getWriteChannel(ShpFileType, FileReader)
+     * @see #getWriteChannel(ShpFileType, FileWriter)
      * @param type the type of the file desired.
      * @param requestor the object that is requesting the URL. The same object must release the lock
      *     and is also used for debugging.
@@ -345,7 +342,7 @@ public class ShpFiles {
      *
      * @see #getInputStream(ShpFileType, FileReader)
      * @see #getReadChannel(ShpFileType, FileReader)
-     * @see #getWriteChannel(ShpFileType, FileReader)
+     * @see #getWriteChannel(ShpFileType, FileWriter)
      * @param type the type of the file desired.
      * @param requestor the object that is requesting the URL. The same object must release the lock
      *     and is also used for debugging.
@@ -416,7 +413,7 @@ public class ShpFiles {
      *
      * @see #getInputStream(ShpFileType, FileReader)
      * @see #getReadChannel(ShpFileType, FileReader)
-     * @see #getWriteChannel(ShpFileType, FileReader)
+     * @see #getWriteChannel(ShpFileType, FileWriter)
      * @param type the type of the file desired.
      * @param requestor the object that is requesting the File. The same object must release the
      *     lock and is also used for debugging.
@@ -438,7 +435,7 @@ public class ShpFiles {
      *
      * @see #getInputStream(ShpFileType, FileReader)
      * @see #getReadChannel(ShpFileType, FileReader)
-     * @see #getWriteChannel(ShpFileType, FileReader)
+     * @see #getWriteChannel(ShpFileType, FileWriter)
      * @param type the type of the file desired.
      * @param requestor the object that is requesting the URL. The same object must release the lock
      *     and is also used for debugging.
@@ -468,7 +465,7 @@ public class ShpFiles {
      *
      * @see #getInputStream(ShpFileType, FileReader)
      * @see #getReadChannel(ShpFileType, FileReader)
-     * @see #getWriteChannel(ShpFileType, FileReader)
+     * @see #getWriteChannel(ShpFileType, FileWriter)
      * @param type the type of the file desired.
      * @param requestor the object that is requesting the URL. The same object must release the lock
      *     and is also used for debugging.
@@ -607,6 +604,96 @@ public class ShpFiles {
     }
 
     /**
+     * Returns true if the host of url is s3a
+     *
+     * @return
+     */
+    public boolean isS3a() {
+        if (isLocal()) return false;
+        return "s3a".equals(urls.get(ShpFileType.SHP).getHost().toLowerCase());
+    }
+
+    /**
+     * get the inputStream of the specific object in s3Client
+     *
+     * @param url
+     * @return
+     */
+    public InputStream getInputStreamFromURL(URL url) {
+        String path = url.getPath();
+        String[] split = path.split("/");
+        if (split.length < 6) {
+            throw new RuntimeException(
+                    String.format(
+                            "Failed when construct s3Client by url %s", url.toExternalForm()));
+        }
+        String s3Endpoint = split[1];
+        String serviceRegion = split[2];
+        String s3AccessKey = split[3];
+        String s3SecretKey = split[4];
+        String s3Bucket = split[5];
+        String s3Prefix = split[6];
+        ClientConfiguration config = new ClientConfiguration();
+        config.setMaxConnections(128);
+        config.setMaxErrorRetry(16);
+        config.setConnectionTimeout(100000);
+        config.setSocketTimeout(100000);
+        config.setRetryPolicy(
+                PredefinedRetryPolicies.getDefaultRetryPolicyWithCustomMaxRetries(32));
+
+        // construct s3Clent by url
+        AWSCredentialsProvider credentials =
+                new AWSCredentialsProviderChain(
+                        new BasicAWSCredentialsProvider(s3AccessKey, s3SecretKey),
+                        new AnonymousAWSCredentialsProvider());
+        AmazonS3 s3Client = new AmazonS3Client(credentials, config);
+        s3Client.setEndpoint(s3Endpoint);
+
+        // get inputStream of the specific object in s3Client
+        GetObjectRequest request = new GetObjectRequest(s3Bucket, s3Prefix);
+        S3Object object = s3Client.getObject(request);
+        S3ObjectInputStream inputStream = object.getObjectContent();
+        return inputStream;
+    }
+
+    public class BasicAWSCredentialsProvider implements AWSCredentialsProvider {
+        private final String accessKey;
+        private final String secretKey;
+
+        public BasicAWSCredentialsProvider(String accessKey, String secretKey) {
+            this.accessKey = accessKey;
+            this.secretKey = secretKey;
+        }
+
+        public AWSCredentials getCredentials() {
+            if (!StringUtils.isEmpty(accessKey) && !StringUtils.isEmpty(secretKey)) {
+                return new BasicAWSCredentials(accessKey, secretKey);
+            }
+            throw new AmazonClientException("Access key or secret key is null");
+        }
+
+        public void refresh() {}
+
+        @Override
+        public String toString() {
+            return getClass().getSimpleName();
+        }
+    }
+
+    public class AnonymousAWSCredentialsProvider implements AWSCredentialsProvider {
+        public AWSCredentials getCredentials() {
+            return new AnonymousAWSCredentials();
+        }
+
+        public void refresh() {}
+
+        @Override
+        public String toString() {
+            return getClass().getSimpleName();
+        }
+    }
+
+    /**
      * Delete all the shapefile files. If the files are not local or the one files cannot be deleted
      * return false.
      */
@@ -645,6 +732,9 @@ public class ShpFiles {
             throws IOException {
         final URL url = acquireRead(type, requestor);
 
+        if (isS3a()) {
+            return getInputStreamFromURL(url);
+        }
         try {
             FilterInputStream input =
                     new FilterInputStream(url.openStream()) {
@@ -751,13 +841,15 @@ public class ShpFiles {
         URL url = acquireRead(type, requestor);
         ReadableByteChannel channel = null;
         try {
-            if (isLocal()) {
-
+            if (isS3a()) {
+                InputStream in = getInputStreamFromURL(url);
+                channel =
+                        new ReadableByteChannelDecorator(
+                                Channels.newChannel(in), this, url, requestor);
+            } else if (isLocal()) {
                 File file = URLs.urlToFile(url);
-
                 RandomAccessFile raf = new RandomAccessFile(file, "r");
                 channel = new FileChannelDecorator(raf.getChannel(), this, url, requestor);
-
             } else {
                 InputStream in = url.openConnection().getInputStream();
                 channel =
@@ -887,7 +979,7 @@ public class ShpFiles {
      * Returns the status of the memory map cache. When enabled the memory mapped portions of the
      * files are cached and shared (giving each thread a clone of it)
      *
-     * @param memoryMapCacheEnabled
+     * @param
      */
     public boolean isMemoryMapCacheEnabled() {
         return memoryMapCacheEnabled;

@@ -26,6 +26,7 @@
   <groupId>org.geotools</groupId>
   <artifactId>gt-shapefile</artifactId>
   <packaging>jar</packaging>
+  <version>20-SNAPSHOT-fuxi</version>
   <name>Shapefile module</name>
   
 
@@ -135,7 +136,7 @@
     <dependency>
       <groupId>org.geotools</groupId>
       <artifactId>gt-data</artifactId>
-      <version>${project.version}</version>
+      <version>${project.parent.version}</version>
     </dependency>
 
     <dependency>
@@ -146,27 +147,37 @@
     <dependency>
       <groupId>org.geotools</groupId>
       <artifactId>gt-sample-data</artifactId>
-      <version>${project.version}</version>
+      <version>${project.parent.version}</version>
       <scope>test</scope>
     </dependency>
     
     <dependency>
       <groupId>org.geotools</groupId>
       <artifactId>gt-epsg-hsql</artifactId>
-      <version>${project.version}</version>
+      <version>${project.parent.version}</version>
       <scope>test</scope>
     </dependency>
     
     <dependency>
       <groupId>org.geotools</groupId>
       <artifactId>gt-property</artifactId>
-      <version>${project.version}</version>
+      <version>${project.parent.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>
         <groupId>commons-io</groupId>
         <artifactId>commons-io</artifactId>
         <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>3.7</version>
+    </dependency>
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-s3</artifactId>
+      <version>1.11.36</version>
     </dependency>
   </dependencies>
 
